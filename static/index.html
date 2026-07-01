@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workshop Progress</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem;
+    background: #f8fafc;
+    color: #0f172a;
+  }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+  .layout { display: grid; grid-template-columns: 1fr; gap: 1rem; align-items: start; }
+  @media (min-width: 720px) {
+    .layout.joined { grid-template-columns: 5fr 7fr; }
+  }
+  .card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  }
+  label { display: block; margin-bottom: .5rem; font-weight: 600; }
+  input[type=text], textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: .6rem .8rem;
+    font-size: 1rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 3rem; }
+  button {
+    margin-top: .8rem;
+    padding: .6rem 1.2rem;
+    font-size: 1rem;
+    border: 0;
+    border-radius: 8px;
+    background: #2563eb;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .error { color: #dc2626; margin-top: .5rem; min-height: 1.2em; }
+  ul.checklist { list-style: none; padding: 0; margin: 0; }
+  ul.checklist li {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .55rem .25rem;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 1.05rem;
+  }
+  ul.checklist li:last-child { border-bottom: 0; }
+  ul.checklist input { width: 1.3rem; height: 1.3rem; accent-color: #16a34a; }
+  ul.checklist li.done { color: #16a34a; }
+  .who { color: #64748b; font-size: .9rem; margin-top: 1rem; }
+  .hidden { display: none; }
+  ul.questions { list-style: none; padding: 0; margin: .8rem 0 0; }
+  ul.questions li {
+    display: flex;
+    align-items: flex-start;
+    gap: .7rem;
+    padding: .55rem .25rem;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  ul.questions li:last-child { border-bottom: 0; }
+  ul.questions li.answered { opacity: .55; }
+  .votebox { display: flex; flex-direction: column; align-items: center; min-width: 2rem; }
+  .votebox button {
+    margin: 0;
+    padding: 0 .4rem;
+    font-size: .9rem;
+    line-height: 1.3;
+    background: #f1f5f9;
+    color: #475569;
+    border-radius: 6px;
+  }
+  .votebox button.active { background: #2563eb; color: #fff; }
+  .votebox .score { font-weight: 700; font-size: .95rem; padding: .15rem 0; }
+  .qbody { flex: 1; }
+  .qtext { font-size: .95rem; }
+  .qmeta { color: #64748b; font-size: .78rem; margin-top: .15rem; }
+  .badge {
+    display: inline-block;
+    font-size: .72rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: .05rem .55rem;
+    margin-left: .4rem;
+    background: #dcfce7;
+    color: #15803d;
+  }
+  .qreply {
+    margin-top: .4rem;
+    padding: .45rem .7rem;
+    border-left: 3px solid #16a34a;
+    background: #f0fdf4;
+    border-radius: 0 8px 8px 0;
+    font-size: .9rem;
+  }
+  .qreply strong { color: #15803d; font-size: .78rem; display: block; margin-bottom: .15rem; }
+</style>
+</head>
+<body>
+<h1 id="title">Workshop Progress</h1>
+
+<div id="layout" class="layout">
+  <div id="main">
+    <div id="join" class="card">
+      <label for="name">Your name or nickname</label>
+      <input id="name" type="text" maxlength="40" placeholder="e.g. Mira" autocomplete="off">
+      <div id="passcodeRow" class="hidden">
+        <label for="passcode" style="margin-top:.8rem">Passcode (on the setup slide)</label>
+        <input id="passcode" type="text" maxlength="40" autocomplete="off" autocapitalize="none">
+      </div>
+      <button id="joinBtn">Join</button>
+      <div id="joinError" class="error"></div>
+    </div>
+
+    <div id="list" class="card hidden">
+      <h2>My progress</h2>
+      <ul id="checklist" class="checklist"></ul>
+      <div id="who" class="who"></div>
+    </div>
+  </div>
+
+  <div id="ask" class="card hidden">
+    <h2>Questions</h2>
+    <textarea id="qtext" maxlength="500" placeholder="Ask something — everyone can see and vote. The instructor picks questions up during the session."></textarea>
+    <button id="qBtn">Send question</button>
+    <div id="qError" class="error"></div>
+    <ul id="qList" class="questions"></ul>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get token() { return localStorage.getItem("wp_token") || ""; },
+  set(token) { localStorage.setItem("wp_token", token); },
+  clear() { localStorage.removeItem("wp_token"); },
+};
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json", "X-Token": store.token },
+    ...options,
+  });
+  if (!res.ok) throw Object.assign(new Error(), { status: res.status, detail: (await res.json()).detail });
+  return res.json();
+}
+
+function renderQuestions(questions) {
+  const ul = $("qList");
+  ul.innerHTML = "";
+  for (const q of questions) {
+    const li = document.createElement("li");
+    li.classList.toggle("answered", q.answered);
+
+    const votebox = document.createElement("div");
+    votebox.className = "votebox";
+    const up = document.createElement("button");
+    up.textContent = "▲";
+    up.classList.toggle("active", q.my_vote === 1);
+    const score = document.createElement("div");
+    score.className = "score";
+    score.textContent = q.score;
+    const down = document.createElement("button");
+    down.textContent = "▼";
+    down.classList.toggle("active", q.my_vote === -1);
+    const cast = async v => {
+      try {
+        await api("/api/vote", { method: "POST", body: JSON.stringify({ id: q.id, vote: q.my_vote === v ? 0 : v }) });
+        refreshQuestions();
+      } catch {}
+    };
+    up.onclick = () => cast(1);
+    down.onclick = () => cast(-1);
+    votebox.append(up, score, down);
+
+    const body = document.createElement("div");
+    body.className = "qbody";
+    const text = document.createElement("div");
+    text.className = "qtext";
+    text.textContent = q.text;
+    const meta = document.createElement("div");
+    meta.className = "qmeta";
+    meta.textContent = q.name;
+    if (q.answered) {
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.textContent = "answered";
+      meta.append(badge);
+    }
+    body.append(text, meta);
+    if (q.reply) {
+      const reply = document.createElement("div");
+      reply.className = "qreply";
+      const label = document.createElement("strong");
+      label.textContent = "Instructor";
+      reply.append(label, document.createTextNode(q.reply));
+      body.append(reply);
+    }
+
+    li.append(votebox, body);
+    ul.append(li);
+  }
+}
+
+async function refreshQuestions() {
+  try { renderQuestions((await api("/api/questions")).questions); } catch {}
+}
+
+function render(data) {
+  $("join").classList.add("hidden");
+  $("list").classList.remove("hidden");
+  $("ask").classList.remove("hidden");
+  $("layout").classList.add("joined");
+  $("who").textContent = "Checked in as " + data.name;
+  const ul = $("checklist");
+  ul.innerHTML = "";
+  for (const ex of data.exercises) {
+    const li = document.createElement("li");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = !!data.checks[ex];
+    box.onchange = async () => {
+      li.classList.toggle("done", box.checked);
+      try {
+        await api("/api/check", { method: "POST", body: JSON.stringify({ exercise: ex, done: box.checked }) });
+      } catch {
+        box.checked = !box.checked;
+        li.classList.toggle("done", box.checked);
+      }
+    };
+    li.classList.toggle("done", box.checked);
+    li.append(box, document.createTextNode(ex));
+    ul.append(li);
+  }
+  refreshQuestions();
+}
+
+$("joinBtn").onclick = async () => {
+  $("joinError").textContent = "";
+  try {
+    const data = await api("/api/join", { method: "POST", body: JSON.stringify({ name: $("name").value, passcode: $("passcode").value }) });
+    store.set(data.token);
+    render({ name: data.name, exercises: data.exercises, checks: {} });
+  } catch (e) {
+    $("joinError").textContent = e.detail || "Could not join — try again.";
+  }
+};
+$("name").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
+$("passcode").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
+
+$("qBtn").onclick = async () => {
+  $("qError").textContent = "";
+  const text = $("qtext").value.trim();
+  if (!text) return;
+  try {
+    await api("/api/question", { method: "POST", body: JSON.stringify({ text }) });
+    $("qtext").value = "";
+    refreshQuestions();
+  } catch (e) {
+    $("qError").textContent = e.detail || "Could not send — try again.";
+  }
+};
+
+setInterval(() => {
+  if (store.token && !$("ask").classList.contains("hidden")) refreshQuestions();
+}, 5000);
+
+(async () => {
+  try {
+    const cfg = await api("/api/config");
+    document.title = cfg.title;
+    $("title").textContent = cfg.title;
+    if (cfg.passcode_required) $("passcodeRow").classList.remove("hidden");
+  } catch {}
+  if (!store.token) return;
+  try {
+    render(await api("/api/me"));
+  } catch (e) {
+    if (e.status === 401) store.clear(); // e.g. after an admin reset
+  }
+})();
+</script>
+</body>
+</html>

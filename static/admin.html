@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workshop Progress — Admin</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem;
+    background: #f8fafc;
+    color: #0f172a;
+  }
+  h1 { font-size: 1.3rem; display: flex; justify-content: space-between; align-items: center; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #e2e8f0; padding: .45rem .7rem; text-align: center; }
+  td:first-child, th:first-child { text-align: left; }
+  thead th { background: #f1f5f9; position: sticky; top: 0; }
+  tr.counts td { font-weight: 700; background: #eff6ff; }
+  td.done { background: #dcfce7; color: #15803d; font-weight: 700; }
+  button {
+    padding: .5rem 1rem;
+    font-size: .95rem;
+    border: 0;
+    border-radius: 8px;
+    background: #dc2626;
+    color: #fff;
+    cursor: pointer;
+  }
+  .muted { color: #64748b; font-size: .85rem; margin-top: .75rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  ul.questions { list-style: none; padding: 0; margin: 0; }
+  ul.questions li {
+    display: flex;
+    align-items: baseline;
+    gap: .75rem;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: .55rem .8rem;
+    margin-bottom: .4rem;
+  }
+  ul.questions li.answered { opacity: .55; }
+  ul.questions .qname { font-weight: 700; white-space: nowrap; }
+  ul.questions .qscore {
+    font-weight: 700;
+    color: #2563eb;
+    min-width: 2.2rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+  ul.questions .qtext { flex: 1; }
+  ul.questions button {
+    background: #16a34a;
+    font-size: .8rem;
+    padding: .3rem .7rem;
+    white-space: nowrap;
+  }
+  ul.questions li.answered button { background: #64748b; }
+  ul.questions button.replyBtn { background: #2563eb; }
+  ul.questions .qwrap { flex: 1; }
+  .qreply {
+    margin-top: .35rem;
+    padding: .35rem .6rem;
+    border-left: 3px solid #16a34a;
+    background: #f0fdf4;
+    border-radius: 0 6px 6px 0;
+    font-size: .85rem;
+  }
+  .replyEditor { margin-top: .4rem; }
+  .replyEditor textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: .5rem .7rem;
+    font-size: .9rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 2.8rem;
+  }
+  .replyEditor button { margin-right: .4rem; margin-top: .3rem; }
+  .replyEditor button.cancel { background: #64748b; }
+</style>
+</head>
+<body>
+<h1><span id="title">Workshop Progress</span> — Admin <button id="reset">Reset all</button></h1>
+<table>
+  <thead><tr id="head"></tr></thead>
+  <tbody id="body"></tbody>
+</table>
+<div class="muted">Auto-refreshes every 3 seconds. Reset wipes all participants, checks, and questions.</div>
+
+<h2>Questions <span id="qcount" class="muted"></span></h2>
+<ul id="questions" class="questions"></ul>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function refresh() {
+  const res = await fetch("/api/admin/state");
+  if (!res.ok) return;
+  const data = await res.json();
+
+  $("head").innerHTML = "<th>Name</th>" + data.exercises.map(e => `<th>${e}</th>`).join("");
+
+  const counts = `<tr class="counts"><td>Done (${data.rows.length} joined)</td>` +
+    data.exercises.map(e => `<td>${data.counts[e]}</td>`).join("") + "</tr>";
+
+  const rows = data.rows.map(r =>
+    "<tr><td>" + esc(r.name) + "</td>" +
+    data.exercises.map(e => r.checks[e] ? '<td class="done">✓</td>' : "<td></td>").join("") +
+    "</tr>"
+  ).join("");
+
+  $("body").innerHTML = counts + rows;
+
+  const open = data.questions.filter(q => !q.answered).length;
+  $("qcount").textContent = data.questions.length ? `(${open} open)` : "(none yet)";
+  if (editingId !== null) return; // don't wipe an open reply editor
+  const ul = $("questions");
+  ul.innerHTML = "";
+  for (const q of data.questions) {
+    const li = document.createElement("li");
+    li.classList.toggle("answered", q.answered);
+    const score = document.createElement("span");
+    score.className = "qscore";
+    score.textContent = (q.score > 0 ? "+" : "") + q.score;
+    const name = document.createElement("span");
+    name.className = "qname";
+    name.textContent = q.name;
+
+    const wrap = document.createElement("div");
+    wrap.className = "qwrap";
+    const text = document.createElement("div");
+    text.className = "qtext";
+    text.textContent = q.text;
+    wrap.append(text);
+    if (q.reply) {
+      const reply = document.createElement("div");
+      reply.className = "qreply";
+      reply.textContent = q.reply;
+      wrap.append(reply);
+    }
+
+    const replyBtn = document.createElement("button");
+    replyBtn.className = "replyBtn";
+    replyBtn.textContent = q.reply ? "Edit reply" : "Reply";
+    replyBtn.onclick = () => openEditor(li, wrap, q);
+
+    const btn = document.createElement("button");
+    btn.textContent = q.answered ? "Reopen" : "Mark answered";
+    btn.onclick = async () => {
+      await fetch("/api/admin/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: q.id, answered: !q.answered }),
+      });
+      refresh();
+    };
+    li.append(score, name, wrap, replyBtn, btn);
+    ul.append(li);
+  }
+}
+
+let editingId = null;
+
+function openEditor(li, wrap, q) {
+  if (editingId !== null) return;
+  editingId = q.id;
+  const editor = document.createElement("div");
+  editor.className = "replyEditor";
+  const ta = document.createElement("textarea");
+  ta.maxLength = 2000;
+  ta.value = q.reply || "";
+  ta.placeholder = "Write a reply — participants see it under the question. Saving marks it answered.";
+  const save = document.createElement("button");
+  save.textContent = "Save reply";
+  save.onclick = async () => {
+    await fetch("/api/admin/reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: q.id, reply: ta.value }),
+    });
+    editingId = null;
+    refresh();
+  };
+  const cancel = document.createElement("button");
+  cancel.className = "cancel";
+  cancel.textContent = "Cancel";
+  cancel.onclick = () => { editingId = null; refresh(); };
+  editor.append(ta, save, cancel);
+  wrap.append(editor);
+  ta.focus();
+}
+
+$("reset").onclick = async () => {
+  if (!confirm("Wipe ALL participants and checks?")) return;
+  await fetch("/api/admin/reset", { method: "POST" });
+  refresh();
+};
+
+(async () => {
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    document.title = cfg.title + " — Admin";
+    $("title").textContent = cfg.title;
+  } catch {}
+})();
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
