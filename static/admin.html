@@ -60,6 +60,15 @@
   }
   ul.questions li.answered button { background: #64748b; }
   ul.questions button.replyBtn { background: #2563eb; }
+  ul.feedback { list-style: none; padding: 0; margin: 0; }
+  ul.feedback li {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: .55rem .8rem;
+    margin-bottom: .4rem;
+  }
+  ul.feedback .fts { color: #64748b; font-size: .78rem; margin-top: .2rem; }
   ul.questions .qwrap { flex: 1; }
   .qreply {
     margin-top: .35rem;
@@ -91,10 +100,13 @@
   <thead><tr id="head"></tr></thead>
   <tbody id="body"></tbody>
 </table>
-<div class="muted">Auto-refreshes every 3 seconds. Reset wipes all participants, checks, and questions.</div>
+<div class="muted">Auto-refreshes every 3 seconds. Reset wipes all participants, checks, questions, and feedback.</div>
 
 <h2>Questions <span id="qcount" class="muted"></span></h2>
 <ul id="questions" class="questions"></ul>
+
+<h2>Feedback <span id="fcount" class="muted"></span></h2>
+<ul id="feedback" class="feedback"></ul>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -118,6 +130,21 @@ async function refresh() {
   ).join("");
 
   $("body").innerHTML = counts + rows;
+
+  const fb = data.feedback || [];
+  $("fcount").textContent = fb.length ? `(${fb.length})` : "(none yet)";
+  const ful = $("feedback");
+  ful.innerHTML = "";
+  for (const f of fb) {
+    const li = document.createElement("li");
+    const text = document.createElement("div");
+    text.textContent = f.text;
+    const ts = document.createElement("div");
+    ts.className = "fts";
+    ts.textContent = new Date(f.ts * 1000).toLocaleString();
+    li.append(text, ts);
+    ful.append(li);
+  }
 
   const open = data.questions.filter(q => !q.answered).length;
   $("qcount").textContent = data.questions.length ? `(${open} open)` : "(none yet)";
@@ -157,7 +184,7 @@ async function refresh() {
     btn.onclick = async () => {
       await fetch("/api/admin/answer", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
         body: JSON.stringify({ id: q.id, answered: !q.answered }),
       });
       refresh();
@@ -183,7 +210,7 @@ function openEditor(li, wrap, q) {
   save.onclick = async () => {
     await fetch("/api/admin/reply", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
       body: JSON.stringify({ id: q.id, reply: ta.value }),
     });
     editingId = null;
@@ -200,7 +227,7 @@ function openEditor(li, wrap, q) {
 
 $("reset").onclick = async () => {
   if (!confirm("Wipe ALL participants and checks?")) return;
-  await fetch("/api/admin/reset", { method: "POST" });
+  await fetch("/api/admin/reset", { method: "POST", headers: { "X-Admin-Action": "1" } });
   refresh();
 };
 

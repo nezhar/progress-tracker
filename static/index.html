@@ -61,6 +61,15 @@
   }
   ul.checklist li:last-child { border-bottom: 0; }
   ul.checklist input { width: 1.3rem; height: 1.3rem; accent-color: #16a34a; }
+  ul.checklist label {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex: 1;
+    margin: 0;
+    font-weight: 400;
+    cursor: pointer;
+  }
   ul.checklist li.done { color: #16a34a; }
   .who { color: #64748b; font-size: .9rem; margin-top: 1rem; }
   .hidden { display: none; }
@@ -108,6 +117,23 @@
     font-size: .9rem;
   }
   .qreply strong { color: #15803d; font-size: .78rem; display: block; margin-bottom: .15rem; }
+  dialog {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    width: min(28rem, calc(100vw - 2rem));
+    box-sizing: border-box;
+  }
+  dialog::backdrop { background: rgba(15, 23, 42, .35); }
+  #composeTitle { margin: 0; }
+  #composeHint { margin: .4rem 0 .6rem; }
+  #composeBar { margin-top: 1rem; text-align: center; }
+  #composeBar button { margin: 0 .25rem; }
+  #composeText { min-height: 4.5rem; }
+  button.cancel { background: #64748b; margin-left: .4rem; }
+  body.embed { padding: .5rem; max-width: none; background: transparent; }
+  body.embed #title { display: none; }
+  body.embed .card { padding: .75rem 1rem; }
 </style>
 </head>
 <body>
@@ -131,23 +157,59 @@
       <ul id="checklist" class="checklist"></ul>
       <div id="who" class="who"></div>
     </div>
+
+    <div id="composeBar" class="hidden">
+      <button id="askQuestionBtn">Questions</button>
+      <button id="sendFeedbackBtn">Feedback</button>
+    </div>
   </div>
 
   <div id="ask" class="card hidden">
     <h2>Questions</h2>
-    <textarea id="qtext" maxlength="500" placeholder="Ask something — everyone can see and vote. The instructor picks questions up during the session."></textarea>
-    <button id="qBtn">Send question</button>
-    <div id="qError" class="error"></div>
     <ul id="qList" class="questions"></ul>
   </div>
 </div>
 
+
+<dialog id="composeDialog">
+  <h2 id="composeTitle"></h2>
+  <div id="composeHint" class="who"></div>
+  <textarea id="composeText" maxlength="500"></textarea>
+  <div>
+    <button id="composeSend">Send question</button>
+    <button id="composeCancel" class="cancel">Cancel</button>
+  </div>
+  <div id="composeError" class="error"></div>
+</dialog>
+
 <script>
 const $ = id => document.getElementById(id);
+
+if (new URLSearchParams(location.search).has("embed")) {
+  document.body.classList.add("embed");
+  const postHeight = () => parent.postMessage(
+    { type: "progress-tracker:height", height: document.documentElement.scrollHeight },
+    "*",  // height is not sensitive; embedding origin is unknown by design
+  );
+  new ResizeObserver(postHeight).observe(document.documentElement);
+  addEventListener("load", postHeight);
+}
+
+// Strict privacy contexts (e.g. some third-party iframe setups) throw on
+// localStorage access; fall back to an in-memory token for the tab session.
 const store = {
-  get token() { return localStorage.getItem("wp_token") || ""; },
-  set(token) { localStorage.setItem("wp_token", token); },
-  clear() { localStorage.removeItem("wp_token"); },
+  mem: "",
+  get token() {
+    try { return localStorage.getItem("wp_token") || this.mem; } catch { return this.mem; }
+  },
+  set(token) {
+    this.mem = token;
+    try { localStorage.setItem("wp_token", token); } catch {}
+  },
+  clear() {
+    this.mem = "";
+    try { localStorage.removeItem("wp_token"); } catch {}
+  },
 };
 
 async function api(path, options = {}) {
@@ -224,6 +286,7 @@ function render(data) {
   $("join").classList.add("hidden");
   $("list").classList.remove("hidden");
   $("ask").classList.remove("hidden");
+  $("composeBar").classList.remove("hidden");
   $("layout").classList.add("joined");
   $("who").textContent = "Checked in as " + data.name;
   const ul = $("checklist");
@@ -243,7 +306,9 @@ function render(data) {
       }
     };
     li.classList.toggle("done", box.checked);
-    li.append(box, document.createTextNode(ex));
+    const label = document.createElement("label");
+    label.append(box, document.createTextNode(ex));
+    li.append(label);
     ul.append(li);
   }
   refreshQuestions();
@@ -262,16 +327,38 @@ $("joinBtn").onclick = async () => {
 $("name").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
 $("passcode").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
 
-$("qBtn").onclick = async () => {
-  $("qError").textContent = "";
-  const text = $("qtext").value.trim();
+let composeType = "question";
+function openCompose(t) {
+  composeType = t;
+  $("composeTitle").textContent = t === "question" ? "Ask a question" : "Send feedback";
+  $("composeHint").textContent = t === "question"
+    ? "Everyone can see and vote. The instructor picks questions up during the session."
+    : "Sent anonymously — only the instructor sees this.";
+  $("composeSend").textContent = t === "question" ? "Send question" : "Send feedback";
+  $("composeError").textContent = "";
+  $("composeDialog").showModal();
+  $("composeText").focus();
+}
+$("askQuestionBtn").onclick = () => openCompose("question");
+$("sendFeedbackBtn").onclick = () => openCompose("feedback");
+$("composeCancel").onclick = () => $("composeDialog").close();
+// Only Cancel or a successful submit may close the dialog (block Esc).
+$("composeDialog").addEventListener("cancel", e => e.preventDefault());
+
+$("composeSend").onclick = async () => {
+  const text = $("composeText").value.trim();
   if (!text) return;
+  $("composeError").textContent = "";
   try {
-    await api("/api/question", { method: "POST", body: JSON.stringify({ text }) });
-    $("qtext").value = "";
-    refreshQuestions();
+    await api(composeType === "question" ? "/api/question" : "/api/feedback", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    $("composeText").value = "";
+    $("composeDialog").close();
+    if (composeType === "question") refreshQuestions();
   } catch (e) {
-    $("qError").textContent = e.detail || "Could not send — try again.";
+    $("composeError").textContent = e.detail || "Could not send — try again.";
   }
 };
 

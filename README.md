@@ -8,6 +8,8 @@ workshop.
   token issued at join time and kept in `localStorage` enforces that. A shared
   questions panel sits next to the checklist: everyone sees all questions and
   can upvote/downvote them (one vote per person per question, toggleable).
+  A button below the board opens a dialog to ask a question or send feedback —
+  feedback is anonymous and visible only to the admin.
 - **Admin** opens `/admin` (HTTP Basic, user `admin`), sees the full table
   with live done-counts per exercise plus all questions sorted by votes (open
   ones first), and can reset everything. Each question takes a written reply —
@@ -58,7 +60,31 @@ Set via `.env` (see `.env.example`; compose reads it automatically):
 | `EXERCISES` | `Setup,Ex 1,Ex 2,Ex 3,Ex 4,Ex 5,Ex 6` | Checklist columns |
 | `MAX_PARTICIPANTS` | `200` | Join cap (abuse guard) |
 | `MAX_QUESTIONS_PER_PERSON` | `20` | Question cap per participant |
+| `MAX_FEEDBACK_PER_PERSON` | `20` | Feedback cap per participant |
 | `DATA_FILE` | `/data/progress.json` | State file location |
+
+## Embedding as an iframe
+
+Add `?embed=1` — the tracker hides its own title, drops page padding/background,
+and reports its content height to the parent via `postMessage`:
+
+```html
+<iframe id="tracker" src="https://tracker.example.com/?embed=1"
+        style="width:100%; border:0" title="Workshop progress"></iframe>
+<script>
+  const tracker = document.getElementById("tracker");
+  window.addEventListener("message", (event) => {
+    if (event.source !== tracker.contentWindow) return;
+    if (event.data?.type !== "progress-tracker:height") return;
+    tracker.style.height = event.data.height + "px";
+  });
+</script>
+```
+
+Note on cross-site storage: browsers partition third-party localStorage, so a
+participant who joins inside the embed has a separate identity from a direct
+visit (and strict privacy modes may not persist it at all — the join then lasts
+for the tab session).
 
 ## Workshop notes
 

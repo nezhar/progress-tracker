@@ -10,6 +10,7 @@ Configuration (environment variables):
     WORKSHOP_TITLE  optional, title shown on both pages
     EXERCISES       optional, comma-separated column names
     DATA_FILE       optional, path to the JSON state file (default /data/progress.json)
+    MAX_FEEDBACK_PER_PERSON  optional, per-participant feedback cap (default 20)
 """
 
 import asyncio
@@ -39,6 +40,7 @@ WORKSHOP_TITLE = os.environ.get("WORKSHOP_TITLE", "Workshop Progress")
 PARTICIPANT_PASSCODE = os.environ.get("PARTICIPANT_PASSCODE", "").strip()
 MAX_PARTICIPANTS = int(os.environ.get("MAX_PARTICIPANTS", "200"))
 MAX_QUESTIONS_PER_PERSON = int(os.environ.get("MAX_QUESTIONS_PER_PERSON", "20"))
+MAX_FEEDBACK_PER_PERSON = int(os.environ.get("MAX_FEEDBACK_PER_PERSON", "20"))
 
 app = FastAPI(title="Workshop Progress Tracker")
 security = HTTPBasic()
@@ -51,11 +53,12 @@ def load_state() -> dict:
     if DATA_FILE.exists():
         state = json.loads(DATA_FILE.read_text())
         state.setdefault("questions", [])
+        state.setdefault("feedback", [])
         for q in state["questions"]:
             q.setdefault("votes", {})
             q.setdefault("reply", "")
         return state
-    return {"participants": {}, "questions": []}
+    return {"participants": {}, "questions": [], "feedback": []}
 
 
 def question_view(q: dict, viewer: str | None = None) -> dict:
@@ -95,6 +98,21 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> None
         )
 
 
+def require_admin_action(
+    credentials: HTTPBasicCredentials = Depends(security),
+    x_admin_action: str = Header(default=""),
+) -> None:
+    """Admin auth for state-changing endpoints.
+
+    The custom header blocks CSRF via cached Basic credentials: a cross-site
+    form cannot set it, and a cross-origin fetch that tries dies in the CORS
+    preflight.
+    """
+    require_admin(credentials)
+    if x_admin_action != "1":
+        raise HTTPException(403, "Missing X-Admin-Action header")
+
+
 async def require_participant(x_token: str = Header(default="")) -> tuple[str, dict]:
     async with lock:
         state = load_state()
@@ -115,6 +133,10 @@ class CheckRequest(BaseModel):
 
 
 class QuestionRequest(BaseModel):
+    text: str
+
+
+class FeedbackRequest(BaseModel):
     text: str
 
 
@@ -238,8 +260,28 @@ async def vote(req: VoteRequest, participant=Depends(require_participant)):
     raise HTTPException(404, "Unknown question id")
 
 
+@app.post("/api/feedback")
+async def send_feedback(req: FeedbackRequest, participant=Depends(require_participant)):
+    """Anonymous feedback: token required as a spam guard, name not stored."""
+    name, _ = participant
+    text = re.sub(r"\s+", " ", req.text).strip()
+    if not (1 <= len(text) <= 500):
+        raise HTTPException(422, "Feedback must be 1-500 characters")
+    async with lock:
+        state = load_state()
+        row = state["participants"][name]
+        if row.get("feedback_count", 0) >= MAX_FEEDBACK_PER_PERSON:
+            raise HTTPException(429, "Feedback limit reached — talk to the instructor directly")
+        row["feedback_count"] = row.get("feedback_count", 0) + 1
+        state["feedback"].append(
+            {"id": secrets.token_hex(8), "text": text, "ts": time.time()}
+        )
+        save_state(state)
+    return {"ok": True}
+
+
 @app.post("/api/admin/reply")
-async def admin_reply(req: ReplyRequest, _=Depends(require_admin)):
+async def admin_reply(req: ReplyRequest, _=Depends(require_admin_action)):
     reply = req.reply.strip()
     if len(reply) > 2000:
         raise HTTPException(422, "Reply too long (max 2000 characters)")
@@ -256,7 +298,7 @@ async def admin_reply(req: ReplyRequest, _=Depends(require_admin)):
 
 
 @app.post("/api/admin/answer")
-async def admin_answer(req: AnswerRequest, _=Depends(require_admin)):
+async def admin_answer(req: AnswerRequest, _=Depends(require_admin_action)):
     async with lock:
         state = load_state()
         for q in state["questions"]:
@@ -287,13 +329,14 @@ async def admin_state(_=Depends(require_admin)):
         "rows": rows,
         "counts": counts,
         "questions": questions,
+        "feedback": list(reversed(state["feedback"])),
     }
 
 
 @app.post("/api/admin/reset")
-async def admin_reset(_=Depends(require_admin)):
+async def admin_reset(_=Depends(require_admin_action)):
     async with lock:
-        save_state({"participants": {}, "questions": []})
+        save_state({"participants": {}, "questions": [], "feedback": []})
     return {"ok": True}
 
 
