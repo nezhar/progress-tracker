@@ -13,7 +13,7 @@
     background: #f8fafc;
     color: #0f172a;
   }
-  h1 { font-size: 1.3rem; display: flex; justify-content: space-between; align-items: center; }
+  h1 { font-size: 1.3rem; }
   table { border-collapse: collapse; width: 100%; background: #fff; }
   th, td { border: 1px solid #e2e8f0; padding: .45rem .7rem; text-align: center; }
   td:first-child, th:first-child { text-align: left; }
@@ -92,15 +92,98 @@
   }
   .replyEditor button { margin-right: .4rem; margin-top: .3rem; }
   .replyEditor button.cancel { background: #64748b; }
+
+  .sessions {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  .sessions h2 { margin-top: 0; }
+  .sessionForm, .sessionActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+    margin-bottom: .75rem;
+  }
+  input[type=text] {
+    padding: .5rem .7rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font: inherit;
+  }
+  .sessionList {
+    display: grid;
+    gap: .4rem;
+    margin-bottom: .75rem;
+  }
+  .sessionItem {
+    display: grid;
+    grid-template-columns: minmax(10rem, 1fr) auto;
+    gap: .6rem;
+    align-items: center;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: .55rem .7rem;
+    background: #f8fafc;
+  }
+  .sessionItem.selected { outline: 2px solid #2563eb; }
+  .sessionMeta { color: #64748b; font-size: .8rem; margin-top: .15rem; }
+  .sessionItem button, .sessionActions button, .sessionForm button {
+    margin: 0;
+    background: #2563eb;
+  }
+  #deleteSession { background: #dc2626; }
+  #deactivate { background: #64748b; }
+  .error { color: #dc2626; min-height: 1.2em; }
+  .hidden { display: none; }
+  dialog {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    max-width: min(26rem, 90vw);
+  }
+  dialog::backdrop { background: rgba(15, 23, 42, .35); }
+  .modalActions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
 </style>
 </head>
 <body>
-<h1><span id="title">Workshop Progress</span> — Admin <button id="reset">Reset all</button></h1>
+<h1><span id="title">Workshop Progress</span> — Admin</h1>
+
+<section class="sessions">
+  <h2>Sessions <span id="activeSession" class="muted"></span></h2>
+  <form id="createSession" class="sessionForm">
+    <input id="newSessionName" type="text" maxlength="80" placeholder="Session name" autocomplete="off">
+    <input id="newAccessCode" type="text" maxlength="80" placeholder="Access code" autocomplete="off">
+    <button type="submit">Create</button>
+  </form>
+  <div id="sessionError" class="error"></div>
+  <div id="sessionList" class="sessionList"></div>
+  <div class="sessionActions">
+    <button id="activateSession">Activate selected</button>
+    <button id="deactivate">No active session</button>
+    <button id="exportSession">Export selected</button>
+    <button id="importSession">Import</button>
+    <button id="deleteSession">Delete selected</button>
+    <input id="importFile" class="hidden" type="file" accept="application/json">
+  </div>
+</section>
+
+<dialog id="switchDialog">
+  <p id="switchDialogText"></p>
+  <div class="modalActions">
+    <button id="switchCancel" type="button">Cancel</button>
+    <button id="switchConfirm" type="button">Switch</button>
+  </div>
+</dialog>
+
 <table>
   <thead><tr id="head"></tr></thead>
   <tbody id="body"></tbody>
 </table>
-<div class="muted">Auto-refreshes every 3 seconds. Reset wipes all participants, checks, questions, and feedback.</div>
+<div class="muted">Auto-refreshes every 3 seconds. Data shown below belongs to the selected session.</div>
 
 <h2>Questions <span id="qcount" class="muted"></span></h2>
 <ul id="questions" class="questions"></ul>
@@ -113,23 +196,77 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-async function refresh() {
-  const res = await fetch("/api/admin/state");
-  if (!res.ok) return;
-  const data = await res.json();
+let editingId = null;
+let selectedSessionId = null;
+let sessions = [];
 
-  $("head").innerHTML = "<th>Name</th>" + data.exercises.map(e => `<th>${e}</th>`).join("");
+async function adminFetch(path, options = {}) {
+  const res = await fetch(path, options);
+  if (!res.ok) throw Object.assign(new Error(), { status: res.status, detail: (await res.json()).detail });
+  return res.json();
+}
 
+function selectedSession() {
+  return sessions.find(s => s.id === selectedSessionId) || null;
+}
+
+function renderSessions(data) {
+  sessions = data.sessions || [];
+  if (!selectedSessionId || !sessions.some(s => s.id === selectedSessionId)) {
+    selectedSessionId = data.active_session_id || sessions[0]?.id || null;
+  }
+  const active = sessions.find(s => s.active);
+  $("activeSession").textContent = active ? `active: ${active.name}` : "no active session";
+  $("deactivate").textContent = active ? "No active session" : "Inactive";
+  const list = $("sessionList");
+  list.innerHTML = "";
+  for (const s of sessions) {
+    const item = document.createElement("div");
+    item.className = "sessionItem";
+    item.classList.toggle("selected", s.id === selectedSessionId);
+    const info = document.createElement("div");
+    info.innerHTML = `<strong>${esc(s.name)}</strong>${s.active ? ' <span class="muted">active</span>' : ""}` +
+      `<div class="sessionMeta">code: ${esc(s.access_code)} · ${s.participant_count} joined · ${s.open_question_count} open questions · ${s.feedback_count} feedback</div>`;
+    const choose = document.createElement("button");
+    choose.textContent = s.id === selectedSessionId ? "Selected" : "Select";
+    choose.onclick = () => {
+      selectedSessionId = s.id;
+      refreshSelectedState();
+      renderSessions({ sessions, active_session_id: data.active_session_id });
+    };
+    item.append(info, choose);
+    list.append(item);
+  }
+}
+
+function renderBoard(data) {
+  $("head").innerHTML = "<th>Name</th>" + data.exercises.map(e => `<th>${esc(e)}</th>`).join("") + "<th></th>";
   const counts = `<tr class="counts"><td>Done (${data.rows.length} joined)</td>` +
-    data.exercises.map(e => `<td>${data.counts[e]}</td>`).join("") + "</tr>";
-
-  const rows = data.rows.map(r =>
-    "<tr><td>" + esc(r.name) + "</td>" +
-    data.exercises.map(e => r.checks[e] ? '<td class="done">✓</td>' : "<td></td>").join("") +
-    "</tr>"
-  ).join("");
-
-  $("body").innerHTML = counts + rows;
+    data.exercises.map(e => `<td>${data.counts[e]}</td>`).join("") + "<td></td></tr>";
+  const body = $("body");
+  body.innerHTML = counts;
+  for (const r of data.rows) {
+    const tr = document.createElement("tr");
+    const nameTd = document.createElement("td");
+    nameTd.textContent = r.name;
+    tr.append(nameTd);
+    for (const e of data.exercises) {
+      const td = document.createElement("td");
+      if (r.checks[e]) {
+        td.className = "done";
+        td.textContent = "✓";
+      }
+      tr.append(td);
+    }
+    const actionTd = document.createElement("td");
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "rowRemove";
+    removeBtn.textContent = "Remove";
+    removeBtn.onclick = () => removeParticipant(r.name);
+    actionTd.append(removeBtn);
+    tr.append(actionTd);
+    body.append(tr);
+  }
 
   const fb = data.feedback || [];
   $("fcount").textContent = fb.length ? `(${fb.length})` : "(none yet)";
@@ -160,7 +297,6 @@ async function refresh() {
     const name = document.createElement("span");
     name.className = "qname";
     name.textContent = q.name;
-
     const wrap = document.createElement("div");
     wrap.className = "qwrap";
     const text = document.createElement("div");
@@ -173,28 +309,47 @@ async function refresh() {
       reply.textContent = q.reply;
       wrap.append(reply);
     }
-
     const replyBtn = document.createElement("button");
     replyBtn.className = "replyBtn";
     replyBtn.textContent = q.reply ? "Edit reply" : "Reply";
     replyBtn.onclick = () => openEditor(li, wrap, q);
-
     const btn = document.createElement("button");
     btn.textContent = q.answered ? "Reopen" : "Mark answered";
     btn.onclick = async () => {
       await fetch("/api/admin/answer", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
-        body: JSON.stringify({ id: q.id, answered: !q.answered }),
+        body: JSON.stringify({ id: q.id, answered: !q.answered, session_id: selectedSessionId }),
       });
-      refresh();
+      refreshSelectedState();
     };
     li.append(score, name, wrap, replyBtn, btn);
     ul.append(li);
   }
 }
 
-let editingId = null;
+async function refreshSessions() {
+  const data = await adminFetch("/api/admin/sessions");
+  renderSessions(data);
+}
+
+async function refreshSelectedState() {
+  if (!selectedSessionId) {
+    renderBoard({ exercises: [], rows: [], counts: {}, questions: [], feedback: [] });
+    return;
+  }
+  const data = await adminFetch(`/api/admin/sessions/${selectedSessionId}/state`);
+  renderBoard(data);
+}
+
+async function refresh() {
+  try {
+    await refreshSessions();
+    await refreshSelectedState();
+  } catch (e) {
+    $("sessionError").textContent = e.detail || "Could not refresh sessions.";
+  }
+}
 
 function openEditor(li, wrap, q) {
   if (editingId !== null) return;
@@ -211,25 +366,129 @@ function openEditor(li, wrap, q) {
     await fetch("/api/admin/reply", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
-      body: JSON.stringify({ id: q.id, reply: ta.value }),
+      body: JSON.stringify({ id: q.id, reply: ta.value, session_id: selectedSessionId }),
     });
     editingId = null;
-    refresh();
+    refreshSelectedState();
   };
   const cancel = document.createElement("button");
   cancel.className = "cancel";
   cancel.textContent = "Cancel";
-  cancel.onclick = () => { editingId = null; refresh(); };
+  cancel.onclick = () => { editingId = null; refreshSelectedState(); };
   editor.append(ta, save, cancel);
   wrap.append(editor);
   ta.focus();
 }
 
-$("reset").onclick = async () => {
-  if (!confirm("Wipe ALL participants and checks?")) return;
-  await fetch("/api/admin/reset", { method: "POST", headers: { "X-Admin-Action": "1" } });
+$("createSession").onsubmit = async e => {
+  e.preventDefault();
+  $("sessionError").textContent = "";
+  try {
+    const created = await adminFetch("/api/admin/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
+      body: JSON.stringify({ name: $("newSessionName").value, access_code: $("newAccessCode").value }),
+    });
+    selectedSessionId = created.id;
+    $("newSessionName").value = "";
+    $("newAccessCode").value = "";
+    refresh();
+  } catch (e) {
+    $("sessionError").textContent = e.detail || "Could not create session.";
+  }
+};
+
+$("activateSession").onclick = async () => {
+  const session = selectedSession();
+  if (!session) return;
+  const active = sessions.find(s => s.active);
+  if (active && active.id !== session.id) {
+    $("switchDialogText").textContent =
+      `Switch the active session from "${active.name}" to "${session.name}"? ` +
+      `Participants joined under the current active session will be returned to the join screen (their token becomes invalid).`;
+    $("switchDialog")._pendingSessionId = session.id;
+    $("switchDialog").showModal();
+    return;
+  }
+  await activateSession(session.id);
+};
+
+async function activateSession(id) {
+  $("sessionError").textContent = "";
+  await fetch(`/api/admin/sessions/${id}/activate`, {
+    method: "POST",
+    headers: { "X-Admin-Action": "1" },
+  });
+  refresh();
+}
+
+$("switchCancel").onclick = () => $("switchDialog").close();
+$("switchConfirm").onclick = async () => {
+  const id = $("switchDialog")._pendingSessionId;
+  $("switchDialog").close();
+  if (id) await activateSession(id);
+};
+
+$("deactivate").onclick = async () => {
+  $("sessionError").textContent = "";
+  await fetch("/api/admin/sessions/deactivate", { method: "POST", headers: { "X-Admin-Action": "1" } });
   refresh();
 };
+
+$("exportSession").onclick = () => {
+  if (!selectedSessionId) return;
+  location.href = `/api/admin/sessions/${selectedSessionId}/export`;
+};
+
+$("importSession").onclick = () => $("importFile").click();
+$("importFile").onchange = async () => {
+  const file = $("importFile").files[0];
+  if (!file) return;
+  $("sessionError").textContent = "";
+  try {
+    const payload = JSON.parse(await file.text());
+    const imported = await adminFetch("/api/admin/sessions/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
+      body: JSON.stringify(payload),
+    });
+    selectedSessionId = imported.id;
+    refresh();
+  } catch (e) {
+    $("sessionError").textContent = e.detail || "Could not import session.";
+  } finally {
+    $("importFile").value = "";
+  }
+};
+
+$("deleteSession").onclick = async () => {
+  const session = selectedSession();
+  if (!session) return;
+  if (!confirm(`Delete "${session.name}" and all of its data?`)) return;
+  $("sessionError").textContent = "";
+  await fetch(`/api/admin/sessions/${session.id}`, {
+    method: "DELETE",
+    headers: { "X-Admin-Action": "1" },
+  });
+  selectedSessionId = null;
+  refresh();
+};
+
+async function removeParticipant(name) {
+  if (!selectedSessionId) return;
+  if (!confirm(`Remove "${name}" from this session? Their checklist and join token are deleted; their questions, votes, and feedback stay in the session.`)) return;
+  $("sessionError").textContent = "";
+  try {
+    await adminFetch(`/api/admin/sessions/${selectedSessionId}/participants/remove`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
+      body: JSON.stringify({ name }),
+    });
+    refresh();
+  } catch (e) {
+    $("sessionError").textContent = e.detail || "Could not remove participant.";
+  }
+}
 
 (async () => {
   try {

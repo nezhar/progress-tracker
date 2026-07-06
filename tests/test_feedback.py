@@ -3,10 +3,34 @@ import json
 import app as app_module
 
 ADMIN = ("admin", "adminpw")
+ACTION = {"X-Admin-Action": "1"}
 
 
-def join(client, name="Mira"):
-    res = client.post("/api/join", json={"name": name})
+def create_session(client, name="Morning", access_code="ROOM1", activate=False):
+    res = client.post(
+        "/api/admin/sessions",
+        json={"name": name, "access_code": access_code},
+        auth=ADMIN,
+        headers=ACTION,
+    )
+    assert res.status_code == 200
+    session_id = res.json()["id"]
+    if activate:
+        active = client.post(
+            f"/api/admin/sessions/{session_id}/activate",
+            auth=ADMIN,
+            headers=ACTION,
+        )
+        assert active.status_code == 200
+    return session_id
+
+
+def join(client, name="Mira", access_code="ROOM1"):
+    create_session(client, access_code=access_code, activate=True)
+    res = client.post(
+        "/api/join",
+        json={"name": name, "access_code": access_code},
+    )
     assert res.status_code == 200
     return res.json()["token"]
 
@@ -51,12 +75,16 @@ def test_feedback_newest_first(client):
     assert [f["text"] for f in feedback] == ["second", "first"]
 
 
-def test_reset_clears_feedback(client):
+def test_reset_endpoint_is_gone(client):
     headers = {"X-Token": join(client)}
     client.post("/api/feedback", json={"text": "bye"}, headers=headers)
+    client.post("/api/question", json={"text": "Will this stay?"}, headers=headers)
+    before = client.get("/api/admin/state", auth=ADMIN).json()
+
     res = client.post("/api/admin/reset", auth=ADMIN, headers={"X-Admin-Action": "1"})
-    assert res.status_code == 200
-    assert client.get("/api/admin/state", auth=ADMIN).json()["feedback"] == []
+
+    assert res.status_code == 410
+    assert client.get("/api/admin/state", auth=ADMIN).json() == before
 
 
 def test_state_file_without_feedback_key_migrates(client):

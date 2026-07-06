@@ -3,20 +3,34 @@
 Tiny self-hosted "are we done yet?" board for the Prompt Engineering Hands-on
 workshop.
 
-- **Participants** open the root page, type a name once, and get a personal
-  checklist (Setup, Ex 1 … Ex 6). They see and edit only their own list — a
-  token issued at join time and kept in `localStorage` enforces that. A shared
-  questions panel sits next to the checklist: everyone sees all questions and
-  can upvote/downvote them (one vote per person per question, toggleable).
-  A button below the board opens a dialog to ask a question or send feedback —
-  feedback is anonymous and visible only to the admin.
-- **Admin** opens `/admin` (HTTP Basic, user `admin`), sees the full table
-  with live done-counts per exercise plus all questions sorted by votes (open
-  ones first), and can reset everything. Each question takes a written reply —
-  participants see it under the question, and saving a non-empty reply marks
-  the question answered. Handy during exercise time: answer in text while the
-  room works, pick the top-voted rest up verbally.
+- **Participants** can join only when an admin has marked a session active.
+  They enter their name plus the active session's access code. Their checklist,
+  questions, votes, and feedback belong to that session. Each participant sees
+  and edits only their own checklist (a per-name token issued at join enforces
+  this). A shared questions panel sits next to the checklist: everyone sees all
+  questions in the session and can upvote/downvote them (one vote per person
+  per question, toggleable). A button below the board opens a dialog to ask a
+  question or send feedback — feedback is anonymous and visible only to admin.
+- **Admin** opens `/admin` (HTTP Basic, user `admin`), creates sessions with
+  access codes, selects which session to inspect, marks one session active or
+  leaves all sessions inactive, exports one session JSON file, imports one
+  session JSON file as inactive, and deletes whole sessions when they are no
+  longer needed. The selected session's table shows live done-counts per
+  exercise plus questions sorted by votes (open ones first); each question
+  takes a written reply that participants see under the question (saving a
+  non-empty reply marks it answered).
 - State lives in one JSON file on a volume. No database, no accounts.
+
+## Sessions
+
+Sessions preserve workshop data between runs. New installs start with no active
+session, so participants see a closed message until an admin creates and
+activates a session. Existing pre-session data is migrated into one inactive
+session named "Imported workshop".
+
+Export downloads one JSON file for the selected session. Import accepts that
+one-session JSON format, assigns a fresh internal id, and keeps the imported
+session inactive until an admin activates it.
 
 **Run exactly one container / one worker.** Concurrency safety comes from a
 single process serializing all writes behind an in-process lock (plus atomic
@@ -54,7 +68,7 @@ Set via `.env` (see `.env.example`; compose reads it automatically):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ADMIN_PASSWORD` | — (required) | Password for `/admin` and the admin API |
-| `PARTICIPANT_PASSCODE` | empty (open) | Shared join code, e.g. shown on a slide |
+| `PARTICIPANT_PASSCODE` | empty | Deprecated; session access codes are managed on `/admin` |
 | `WORKSHOP_TITLE` | `Workshop Progress` | Title shown on both pages |
 | `PORT` | `8000` | Host port published by compose |
 | `EXERCISES` | `Setup,Ex 1,Ex 2,Ex 3,Ex 4,Ex 5,Ex 6` | Checklist columns |
@@ -88,8 +102,11 @@ for the tab session).
 
 ## Workshop notes
 
-- "Reset all" wipes participants and checks; participants get a fresh join
-  screen on their next interaction (their stored token becomes invalid).
+- "No active session" closes joining without deleting data.
+- Deleting a session removes that session's participants, checks, questions,
+  and feedback. Export first if you want to keep a copy.
+- Activating a different session invalidates tokens issued under the previous
+  active session; participants get a fresh join screen on their next interaction.
 - If someone loses their row (new browser, cleared storage), they just join
   again with a slightly different name.
 - Facilitation rule of thumb: continue when a column reaches ~75% of joined

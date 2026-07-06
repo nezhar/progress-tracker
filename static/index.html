@@ -141,13 +141,17 @@
 
 <div id="layout" class="layout">
   <div id="main">
-    <div id="join" class="card">
+    <div id="closed" class="card hidden">
+      <h2>Workshop closed</h2>
+      <div id="closedMessage" class="who">No session is active right now.</div>
+    </div>
+
+    <div id="join" class="card hidden">
+      <h2 id="sessionName">Session</h2>
       <label for="name">Your name or nickname</label>
       <input id="name" type="text" maxlength="40" placeholder="e.g. Mira" autocomplete="off">
-      <div id="passcodeRow" class="hidden">
-        <label for="passcode" style="margin-top:.8rem">Passcode (on the setup slide)</label>
-        <input id="passcode" type="text" maxlength="40" autocomplete="off" autocapitalize="none">
-      </div>
+      <label for="accessCode" style="margin-top:.8rem">Access code</label>
+      <input id="accessCode" type="text" maxlength="80" autocomplete="off" autocapitalize="none">
       <button id="joinBtn">Join</button>
       <div id="joinError" class="error"></div>
     </div>
@@ -198,17 +202,29 @@ if (new URLSearchParams(location.search).has("embed")) {
 // Strict privacy contexts (e.g. some third-party iframe setups) throw on
 // localStorage access; fall back to an in-memory token for the tab session.
 const store = {
-  mem: "",
+  memToken: "",
+  memSessionId: "",
   get token() {
-    try { return localStorage.getItem("wp_token") || this.mem; } catch { return this.mem; }
+    try { return localStorage.getItem("wp_token") || this.memToken; } catch { return this.memToken; }
   },
-  set(token) {
-    this.mem = token;
-    try { localStorage.setItem("wp_token", token); } catch {}
+  get sessionId() {
+    try { return localStorage.getItem("wp_session_id") || this.memSessionId; } catch { return this.memSessionId; }
+  },
+  set(token, sessionId) {
+    this.memToken = token;
+    this.memSessionId = sessionId;
+    try {
+      localStorage.setItem("wp_token", token);
+      localStorage.setItem("wp_session_id", sessionId);
+    } catch {}
   },
   clear() {
-    this.mem = "";
-    try { localStorage.removeItem("wp_token"); } catch {}
+    this.memToken = "";
+    this.memSessionId = "";
+    try {
+      localStorage.removeItem("wp_token");
+      localStorage.removeItem("wp_session_id");
+    } catch {}
   },
 };
 
@@ -219,6 +235,28 @@ async function api(path, options = {}) {
   });
   if (!res.ok) throw Object.assign(new Error(), { status: res.status, detail: (await res.json()).detail });
   return res.json();
+}
+
+function showClosed(cfg) {
+  $("closed").classList.remove("hidden");
+  $("join").classList.add("hidden");
+  $("list").classList.add("hidden");
+  $("ask").classList.add("hidden");
+  $("composeBar").classList.add("hidden");
+  $("layout").classList.remove("joined");
+  $("closedMessage").textContent = cfg?.session_name
+    ? `${cfg.session_name} is not open for joining.`
+    : "No session is active right now.";
+}
+
+function showJoin(cfg) {
+  $("closed").classList.add("hidden");
+  $("join").classList.remove("hidden");
+  $("list").classList.add("hidden");
+  $("ask").classList.add("hidden");
+  $("composeBar").classList.add("hidden");
+  $("layout").classList.remove("joined");
+  $("sessionName").textContent = cfg.session_name || "Active session";
 }
 
 function renderQuestions(questions) {
@@ -288,7 +326,7 @@ function render(data) {
   $("ask").classList.remove("hidden");
   $("composeBar").classList.remove("hidden");
   $("layout").classList.add("joined");
-  $("who").textContent = "Checked in as " + data.name;
+  $("who").textContent = "Checked in as " + data.name + (data.session_name ? " for " + data.session_name : "");
   const ul = $("checklist");
   ul.innerHTML = "";
   for (const ex of data.exercises) {
@@ -317,15 +355,18 @@ function render(data) {
 $("joinBtn").onclick = async () => {
   $("joinError").textContent = "";
   try {
-    const data = await api("/api/join", { method: "POST", body: JSON.stringify({ name: $("name").value, passcode: $("passcode").value }) });
-    store.set(data.token);
-    render({ name: data.name, exercises: data.exercises, checks: {} });
+    const data = await api("/api/join", {
+      method: "POST",
+      body: JSON.stringify({ name: $("name").value, access_code: $("accessCode").value }),
+    });
+    store.set(data.token, data.session_id);
+    render({ name: data.name, exercises: data.exercises, checks: {}, session_name: data.session_name });
   } catch (e) {
     $("joinError").textContent = e.detail || "Could not join — try again.";
   }
 };
 $("name").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
-$("passcode").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
+$("accessCode").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
 
 let composeType = "question";
 function openCompose(t) {
@@ -367,17 +408,29 @@ setInterval(() => {
 }, 5000);
 
 (async () => {
+  let cfg = null;
   try {
-    const cfg = await api("/api/config");
+    cfg = await api("/api/config");
     document.title = cfg.title;
     $("title").textContent = cfg.title;
-    if (cfg.passcode_required) $("passcodeRow").classList.remove("hidden");
   } catch {}
-  if (!store.token) return;
+  if (!cfg || !cfg.join_open) {
+    store.clear();
+    showClosed(cfg);
+    return;
+  }
+  if (store.sessionId && store.sessionId !== cfg.active_session_id) {
+    store.clear();
+  }
+  if (!store.token) {
+    showJoin(cfg);
+    return;
+  }
   try {
     render(await api("/api/me"));
   } catch (e) {
-    if (e.status === 401) store.clear(); // e.g. after an admin reset
+    if (e.status === 401) store.clear();
+    showJoin(cfg);
   }
 })();
 </script>
