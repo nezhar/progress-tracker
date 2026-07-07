@@ -137,8 +137,25 @@
   }
   #deleteSession { background: #dc2626; }
   #deactivate { background: #64748b; }
+  button { min-height: 2.4rem; }
   .error { color: #dc2626; min-height: 1.2em; }
+  .collapseToggle {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    font-size: .85rem;
+    color: #2563eb;
+    background: transparent;
+    min-height: 0;
+    padding: .2rem .4rem;
+    margin: 0 0 .5rem;
+  }
+  .collapseToggle::before { content: "▾"; font-size: .8rem; }
+  .collapseToggle.collapsed::before { content: "▸"; }
   .hidden { display: none; }
+  .rowRemove { background: #dc2626; font-size: .8rem; padding: .3rem .7rem; min-height: 0; }
+  .tableScroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .modalActions button { min-height: 2.4rem; }
   dialog {
     border: 1px solid #e2e8f0;
     border-radius: 10px;
@@ -147,12 +164,58 @@
   }
   dialog::backdrop { background: rgba(15, 23, 42, .35); }
   .modalActions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+
+  @media (max-width: 760px) {
+    body { max-width: 100%; padding: 1rem .65rem; }
+    h1 { font-size: 1.15rem; }
+    h2 { font-size: 1rem; }
+    .muted { font-size: .8rem; }
+    .sessions { padding: .75rem; margin-bottom: .75rem; }
+    .sessionForm, .sessionActions {
+      flex-direction: column;
+      align-items: stretch;
+      gap: .4rem;
+    }
+    .sessionForm input[type=text],
+    .sessionActions button,
+    .sessionForm button {
+      width: 100%;
+      margin: 0;
+    }
+    .sessionItem {
+      grid-template-columns: 1fr;
+      gap: .4rem;
+      padding: .55rem;
+    }
+    .sessionItem button { justify-self: start; }
+    .sessionMeta { font-size: .75rem; }
+    .tableScroll { margin: 0 -.65rem; }
+    .tableScroll table { min-width: 680px; }
+    .tableScroll th, .tableScroll td { padding: .35rem .45rem; font-size: .85rem; }
+    .replyEditor textarea { font-size: .95rem; }
+  }
+
+  @media (max-width: 540px) {
+    body { padding: .85rem .5rem; }
+    ul.questions li {
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: .4rem .6rem;
+      padding: .5rem .6rem;
+    }
+    ul.questions .qscore { min-width: auto; order: -1; }
+    ul.questions .qname { order: -1; }
+    ul.questions .qwrap { flex-basis: 100%; }
+    ul.questions button { min-height: 2.2rem; }
+    button { min-height: 2.6rem; font-size: 1rem; }
+  }
 </style>
 </head>
 <body>
 <h1><span id="title">Workshop Progress</span> — Admin</h1>
+<button id="sessionsToggle" class="collapseToggle" type="button" aria-expanded="true" aria-controls="sessionsSection">Hide session controls</button>
 
-<section class="sessions">
+<section id="sessionsSection" class="sessions">
   <h2>Sessions <span id="activeSession" class="muted"></span></h2>
   <form id="createSession" class="sessionForm">
     <input id="newSessionName" type="text" maxlength="80" placeholder="Session name" autocomplete="off">
@@ -179,10 +242,12 @@
   </div>
 </dialog>
 
-<table>
-  <thead><tr id="head"></tr></thead>
-  <tbody id="body"></tbody>
-</table>
+<div class="tableScroll">
+  <table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="body"></tbody>
+  </table>
+</div>
 <div class="muted">Auto-refreshes every 3 seconds. Data shown below belongs to the selected session.</div>
 
 <h2>Questions <span id="qcount" class="muted"></span></h2>
@@ -380,6 +445,33 @@ function openEditor(li, wrap, q) {
   ta.focus();
 }
 
+$("sessionsToggle").onclick = () => {
+  const section = $("sessionsSection");
+  const toggle = $("sessionsToggle");
+  const collapsed = section.hasAttribute("hidden");
+  if (collapsed) {
+    section.removeAttribute("hidden");
+    toggle.classList.remove("collapsed");
+    toggle.setAttribute("aria-expanded", "true");
+    toggle.textContent = "Hide session controls";
+    try { localStorage.setItem("wp_admin_sessions_open", "1"); } catch {}
+  } else {
+    section.setAttribute("hidden", "");
+    toggle.classList.add("collapsed");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "Show session controls";
+    try { localStorage.setItem("wp_admin_sessions_open", "0"); } catch {}
+  }
+};
+try {
+  if (localStorage.getItem("wp_admin_sessions_open") === "0") {
+    $("sessionsSection").setAttribute("hidden", "");
+    $("sessionsToggle").classList.add("collapsed");
+    $("sessionsToggle").setAttribute("aria-expanded", "false");
+    $("sessionsToggle").textContent = "Show session controls";
+  }
+} catch {}
+
 $("createSession").onsubmit = async e => {
   e.preventDefault();
   $("sessionError").textContent = "";
@@ -476,7 +568,7 @@ $("deleteSession").onclick = async () => {
 
 async function removeParticipant(name) {
   if (!selectedSessionId) return;
-  if (!confirm(`Remove "${name}" from this session? Their checklist and join token are deleted; their questions, votes, and feedback stay in the session.`)) return;
+  if (!confirm(`Remove "${name}" from this session? Token and checklist are deleted; questions, votes, and feedback stay.`)) return;
   $("sessionError").textContent = "";
   try {
     await adminFetch(`/api/admin/sessions/${selectedSessionId}/participants/remove`, {
