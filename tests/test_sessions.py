@@ -553,6 +553,81 @@ def test_admin_answer_unknown_session_id_returns_not_found(client):
     assert questions[0]["answered"] is False
 
 
+def test_admin_delete_question_can_target_inactive_session(client):
+    first_id = create_session(client, name="Morning", access_code="ROOM1", activate=True)
+    mira = join_session(client, name="Mira", access_code="ROOM1")
+    kept_id = ask_question(client, mira["token"], "Keep me")
+    removed_id = ask_question(client, mira["token"], "Delete me")["id"]
+    second_id = create_session(client, name="Afternoon", access_code="ROOM2", activate=True)
+    nora = join_session(client, name="Nora", access_code="ROOM2")
+    active_question_id = ask_question(client, nora["token"], "Active question")["id"]
+
+    res = client.delete(
+        "/api/admin/question",
+        json={"id": removed_id, "session_id": first_id},
+        auth=ADMIN,
+        headers=ACTION,
+    )
+
+    assert res.status_code == 200
+    first_state = client.get(f"/api/admin/sessions/{first_id}/state", auth=ADMIN).json()
+    second_state = client.get(f"/api/admin/sessions/{second_id}/state", auth=ADMIN).json()
+    assert [q["id"] for q in first_state["questions"]] == [kept_id["id"]]
+    assert [q["id"] for q in second_state["questions"]] == [active_question_id]
+
+
+def test_admin_delete_question_unknown_id_returns_not_found(client):
+    create_session(client, name="Morning", access_code="ROOM1", activate=True)
+    mira = join_session(client, name="Mira", access_code="ROOM1")
+    question_id = ask_question(client, mira["token"], "Will this be recorded?")["id"]
+
+    res = client.delete(
+        "/api/admin/question",
+        json={"id": "definitely-missing", "session_id": None},
+        auth=ADMIN,
+        headers=ACTION,
+    )
+
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Unknown question id"
+    questions = client.get("/api/admin/state", auth=ADMIN).json()["questions"]
+    assert [q["id"] for q in questions] == [question_id]
+
+
+def test_admin_delete_question_requires_admin_action_header(client):
+    create_session(client, name="Morning", access_code="ROOM1", activate=True)
+    mira = join_session(client, name="Mira", access_code="ROOM1")
+    question_id = ask_question(client, mira["token"], "Will this be recorded?")["id"]
+
+    res = client.delete(
+        "/api/admin/question",
+        json={"id": question_id, "session_id": None},
+        auth=ADMIN,
+    )
+
+    assert res.status_code == 403
+    questions = client.get("/api/admin/state", auth=ADMIN).json()["questions"]
+    assert len(questions) == 1
+
+
+def test_admin_delete_question_unknown_session_returns_not_found(client):
+    create_session(client, name="Morning", access_code="ROOM1", activate=True)
+    mira = join_session(client, name="Mira", access_code="ROOM1")
+    question_id = ask_question(client, mira["token"], "Will this be recorded?")["id"]
+
+    res = client.delete(
+        "/api/admin/question",
+        json={"id": question_id, "session_id": "missing"},
+        auth=ADMIN,
+        headers=ACTION,
+    )
+
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Unknown session id"
+    questions = client.get("/api/admin/state", auth=ADMIN).json()["questions"]
+    assert len(questions) == 1
+
+
 def test_join_rejects_duplicate_names_case_insensitively_after_trimming(client):
     create_session(client, access_code="ROOM1", activate=True)
     joined = join_session(client, name="  Mira  ", access_code="ROOM1")

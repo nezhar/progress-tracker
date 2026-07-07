@@ -92,6 +92,7 @@
   }
   .replyEditor button { margin-right: .4rem; margin-top: .3rem; }
   .replyEditor button.cancel { background: #64748b; }
+  ul.questions button.deleteBtn { background: #dc2626; }
 
   .sessions {
     background: #fff;
@@ -388,7 +389,19 @@ function renderBoard(data) {
       });
       refreshSelectedState();
     };
-    li.append(score, name, wrap, replyBtn, btn);
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "deleteBtn";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Delete this question from "${q.name}"?\n\n"${q.text}"`)) return;
+      await fetch("/api/admin/question", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", "X-Admin-Action": "1" },
+        body: JSON.stringify({ id: q.id, session_id: selectedSessionId }),
+      });
+      refreshSelectedState();
+    };
+    li.append(score, name, wrap, replyBtn, btn, deleteBtn);
     ul.append(li);
   }
 }

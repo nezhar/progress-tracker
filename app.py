@@ -419,6 +419,11 @@ class ReplyRequest(BaseModel):
     session_id: str | None = None
 
 
+class RemoveQuestionRequest(BaseModel):
+    id: str
+    session_id: str | None = None
+
+
 class RemoveParticipantRequest(BaseModel):
     name: str
 
@@ -738,6 +743,19 @@ async def admin_reply(req: ReplyRequest, _=Depends(require_admin_action)):
                 save_state(state)
                 return question_view(q)
     raise HTTPException(404, "Unknown question id")
+
+
+@app.delete("/api/admin/question")
+async def admin_delete_question(req: RemoveQuestionRequest, _=Depends(require_admin_action)):
+    async with lock:
+        state = load_state()
+        session = admin_target_session(state, req.session_id)
+        before = len(session["questions"])
+        session["questions"] = [q for q in session["questions"] if q["id"] != req.id]
+        if len(session["questions"]) == before:
+            raise HTTPException(404, "Unknown question id")
+        save_state(state)
+    return {"ok": True}
 
 
 @app.post("/api/admin/answer")

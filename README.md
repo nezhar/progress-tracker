@@ -18,7 +18,8 @@ workshop.
   longer needed. The selected session's table shows live done-counts per
   exercise plus questions sorted by votes (open ones first); each question
   takes a written reply that participants see under the question (saving a
-  non-empty reply marks it answered).
+  non-empty reply marks it answered), and admins can delete a question from the
+  session.
 - State lives in one JSON file on a volume. No database, no accounts.
 
 ## Sessions
